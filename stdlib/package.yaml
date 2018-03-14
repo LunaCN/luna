@@ -9,6 +9,7 @@ library:
     other-modules: Paths_luna_stdlib
 
 dependencies:
+    - async
     - base
     - bytestring
     - containers
@@ -17,10 +18,11 @@ dependencies:
     - dependent-state
     - directory
     - luna-core
-    - luna-syntax-text-parser
+    - luna-parser
     - mtl
     - transformers
     - filepath
+    - safe-exceptions
     - exceptions
     - typelevel
     - luna-passes
