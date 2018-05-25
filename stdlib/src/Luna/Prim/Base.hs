@@ -11,6 +11,7 @@ import qualified Control.Exception           as Exception (evaluate)
 import qualified Control.Exception.Safe      as Exception
 import qualified Data.Aeson                  as Aeson
 import qualified Data.Bifunctor              as Bifunc
+import qualified Data.Bits                   as Bits
 import           Data.ByteString.Lazy        (ByteString)
 import qualified Data.ByteString.Lazy        as ByteString
 import           Data.Foldable               (toList)
@@ -82,8 +83,8 @@ primReal imps = do
         sqrtVal     = toLunaValue imps (sqrt :: Double -> Double)
         logVal      = toLunaValue imps (log  :: Double -> Double)
         uminusVal   = toLunaValue imps ((* (-1)) :: Double -> Double)
-
         toScientificVal = toLunaValue imps (fromFloatDigits :: Double -> Scientific)
+
     return $ Map.fromList [ ("primRealAdd",      Function boxed3Doubles   plusVal    boxed3DoublesAssumptions  )
                           , ("primRealMultiply", Function boxed3Doubles   timeVal    boxed3DoublesAssumptions  )
                           , ("primRealSubtract", Function boxed3Doubles   minusVal   boxed3DoublesAssumptions  )
@@ -148,6 +149,12 @@ primInt imps = do
         succVal        = toLunaValue imps (succ     :: Integer -> Integer)
         showVal        = toLunaValue imps (convert . show :: Integer -> Text)
         toRealVal      = toLunaValue imps (fromIntegral   :: Integer -> Double)
+
+    let shiftVal :: Integer -> Integer -> Integer
+        shiftVal x i = Bits.shift (fromIntegral x) (fromIntegral i)
+    shift' <- makeFunctionPure (toLunaValue imps shiftVal) ["Int", "Int"] "Int"
+
+
     return $ Map.fromList [ ("primIntAdd",         Function boxed3Ints plusVal        boxed3IntsAssumptions)
                           , ("primIntMultiply",    Function boxed3Ints timeVal        boxed3IntsAssumptions)
                           , ("primIntSubtract",    Function boxed3Ints minusVal       boxed3IntsAssumptions)
@@ -161,22 +168,28 @@ primInt imps = do
                           , ("primIntEquals",      Function ints2Bool  eqVal          ints2BoolAssumptions )
                           , ("primIntGt",          Function ints2Bool  gtVal          ints2BoolAssumptions )
                           , ("primIntLt",          Function ints2Bool  ltVal          ints2BoolAssumptions )
+                          , ("primIntShift",       shift')
                           ]
 
 primBinary :: Imports -> IO (Map Name Function)
 primBinary imps = do
     (eqAssu,     eqIr)     <- makeTypePure ["Binary", "Binary"] "Bool"
     (plusAssu,   plusIr)   <- makeTypePure ["Binary", "Binary"] "Binary"
+    (takeAssu,   takeIr)   <- makeTypePure ["Binary", "Int"]    "Binary"
     (toTextAssu, toTextIr) <- makeTypePure ["Binary"]           "Text"
     (lenAssu,    lenIr)    <- makeTypePure ["Binary"]           "Int"
     let toTextVal  = toLunaValue imps Text.decodeUtf8
         eqVal      = toLunaValue imps ((==) :: ByteString -> ByteString -> Bool)
         plusVal    = toLunaValue imps ((<>) :: ByteString -> ByteString -> ByteString)
         lenVal     = toLunaValue imps (fromIntegral . ByteString.length :: ByteString -> Integer)
+        takeVal    = toLunaValue imps (flip (ByteString.take . fromIntegral) :: ByteString -> Integer -> ByteString)
+        dropVal    = toLunaValue imps (flip (ByteString.drop . fromIntegral) :: ByteString -> Integer -> ByteString)
     return $ Map.fromList [ ("primBinaryToText",   Function toTextIr toTextVal  toTextAssu)
                           , ("primBinaryEquals",   Function eqIr     eqVal      eqAssu    )
                           , ("primBinaryConcat",   Function plusIr   plusVal    plusAssu  )
                           , ("primBinaryLength",   Function lenIr    lenVal     lenAssu   )
+                          , ("primBinaryTake",     Function takeIr   takeVal    takeAssu  )
+                          , ("primBinaryDrop",     Function takeIr   dropVal    takeAssu  )
                           ]
 
 primText :: Imports -> IO (Map Name Function)
@@ -211,6 +224,7 @@ primText imps = do
         escapeJSONVal = toLunaValue imps (Text.decodeUtf8 . Aeson.encode :: Text -> Text)
         toIntVal      = toLunaValue imps (readMaybe . convert :: Text -> Maybe Integer)
         toRealVal     = toLunaValue imps (readMaybe . convert :: Text -> Maybe Double)
+
     return $ Map.fromList [ ("primTextConcat",     Function plusIr        plusVal       plusAssu)
                           , ("primTextEquals",     Function eqIr          eqVal         eqAssu)
                           , ("primTextIsEmpty",    Function isEmptyIr     isEmptyVal    isEmptyAssu)
@@ -379,4 +393,3 @@ instance ToLunaObject Aeson.Value where
     toConstructor imps (Aeson.Bool   a) = Constructor "JSONBool"   [toLunaData imps a]
     toConstructor imps  Aeson.Null      = Constructor "JSONNull"   []
     toConstructor imps (Aeson.Object a) = Constructor "JSONObject" [toLunaData imps $ (Map.mapKeys convert $ Map.fromList $ HM.toList a :: Map Text Aeson.Value)]
-
