@@ -1,0 +1,32 @@
+_config/lib: !include "../../config/hpack-common.yaml"
+
+name        : luna-foreign-utils
+version     : 1.0.0
+category    : Data
+license     : Apache-2.0
+stability   : experimental
+homepage    : https://github.com/luna/luna
+bug-reports : https://github.com/luna/luna/issues
+author      : Luna Team
+copyright   : Copyright (C) 2018 Luna Team
+maintainer  : Luna Team
+
+ghc-options:
+    - -O2
+    - -Wall
+
+library:
+    source-dirs:
+        - src
+    dependencies:
+        - base
+        - convert
+        - lens
+        - layered-state
+        - luna-th-builder
+        - luna-typelevel
+        - prologue >= 3.0.0
+        - template-haskell
+
+default-extensions: *luna-extensions
+

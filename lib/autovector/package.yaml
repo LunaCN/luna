@@ -1,0 +1,28 @@
+_config/lib: !include "../../config/hpack-common.yaml"
+
+name        : luna-autovector
+version     : 1.0.0
+category    : Data
+license     : Apache-2.0
+stability   : experimental
+homepage    : https://github.com/luna/luna
+bug-reports : https://github.com/luna/luna/issues
+author      : Luna Team
+copyright   : Copyright (C) 2018 Luna Team
+maintainer  : Luna Team
+
+ghc-options:
+    - -Wall
+    - -O2
+
+library:
+    source-dirs:
+        - src
+    dependencies:
+        - base
+        - luna-foreign-utils
+        - prologue >= 3.0.0
+        - vector
+
+default-extensions: *luna-extensions
+

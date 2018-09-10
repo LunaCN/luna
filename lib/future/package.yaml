@@ -1,0 +1,27 @@
+_config/lib: !include "../../config/hpack-common.yaml"
+
+name        : luna-future
+version     : 1.0.0
+category    : Data
+license     : Apache-2.0
+stability   : experimental
+homepage    : https://github.com/luna/luna
+bug-reports : https://github.com/luna/luna/issues
+author      : Luna Team
+copyright   : Copyright (C) 2018 Luna Team
+maintainer  : Luna Team
+
+ghc-options:
+    - -O2
+    - -Wall
+
+library:
+    source-dirs:
+        - src
+    dependencies:
+        - async
+        - base
+        - prologue
+
+default-extensions: *luna-extensions
+
