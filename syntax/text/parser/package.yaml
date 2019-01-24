@@ -24,13 +24,32 @@ tests:
             - luna-core
             - luna-syntax-text-lexer
             - luna-syntax-text-parser
-            - luna-syntax-text-prettyprint
             - open-browser
             - template-haskell
 
+benchmarks:
+    array-benchmark:
+        main: Main.hs
+        source-dirs:
+            - test/bench
+        ghc-options:
+            - -rtsopts
+            - -threaded
+            - -with-rtsopts=-N
+            - -with-rtsopts=-T
+        dependencies:
+            - attoparsec
+            - base
+            - criterion
+            - frisby
+            - text
+
 dependencies:
+    - attoparsec
     - base
+    - container
     - containers
+    - convert
     - layered-state
     - layouting
     - lens
@@ -41,6 +60,7 @@ dependencies:
     - luna-foreign-utils
     - luna-generic-traversable
     - luna-nested-containers
+    - luna-parser-utils
     - luna-syntax-definition
     - luna-syntax-text-lexer
     - luna-syntax-text-model

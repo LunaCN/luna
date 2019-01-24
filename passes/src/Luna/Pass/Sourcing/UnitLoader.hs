@@ -20,10 +20,9 @@ import qualified Luna.Pass.Attr                       as Attr
 import qualified Luna.Pass.Basic                      as Pass
 import qualified Luna.Pass.Data.Stage                 as TC
 import qualified Luna.Pass.Scheduler                  as Scheduler
-import qualified Luna.Syntax.Text.Parser.Data.Result  as Parser
-import qualified Luna.Syntax.Text.Parser.Data.Invalid as Parser
-import qualified Luna.Syntax.Text.Parser.Pass         as Parser
-import qualified Luna.Syntax.Text.Parser.Pass         as Parser
+import qualified Luna.Syntax.Text.Parser.State.Result  as Parser
+import qualified Luna.Syntax.Text.Parser.State.Invalid as Parser
+import qualified Luna.Pass.Parsing.Parser             as Parser
 import qualified Luna.Syntax.Text.Source              as Parser
 import qualified System.IO                            as IO
 
@@ -73,19 +72,12 @@ loadUnitIfMissing = \knownModules sourcesMap stack modName -> do
     when (Map.notMember modName m && Set.notMember modName knownModules)
         $ loadUnit knownModules sourcesMap stack modName
 
-loadUnit :: Set IR.Qualified
-         -> Map.Map IR.Qualified FilePath
-         -> [IR.Qualified]
-         -> IR.Qualified
-         -> TC.Monad ()
-loadUnit knownModules sourcesMap stack modName = do
-
-    when (modName `elem` stack) $
-        Exception.throw $ ImportsCycleError $ modName : stack :: TC.Monad ()
+readUnit
+    :: FilePath
+    -> IR.Qualified
+    -> TC.Monad UnitRef
+readUnit srcPath name = do
     resetParserState
-    srcPath <- Exception.fromJust (UnitSourcesNotFound stack modName)
-                                  (Map.lookup modName sourcesMap)
-
     fileHandle <- liftIO $ IO.openFile srcPath IO.ReadMode
     liftIO $ IO.hSetEncoding fileHandle IO.utf8
     src <- liftIO $ IO.hGetContents fileHandle
@@ -93,7 +85,7 @@ loadUnit knownModules sourcesMap stack modName = do
     Scheduler.setAttr @Parser.Source $ convert src
     Scheduler.runPassByType @Parser.Parser
 
-    root <- unwrap <$> Scheduler.getAttr @Parser.Result
+    Parser.Result root <- Scheduler.getAttr @Parser.Result
 
     Scheduler.setAttr $ Root $ Layout.relayout root
 
@@ -101,8 +93,26 @@ loadUnit knownModules sourcesMap stack modName = do
 
     imports <- Scheduler.getAttr @Imports
 
-    let unitRef = UnitRef (Unit.Graph root) imports
+    pure $ UnitRef (Unit.Graph $ Layout.unsafeRelayout root) imports
+
+
+loadUnit :: Set IR.Qualified
+         -> Map.Map IR.Qualified FilePath
+         -> [IR.Qualified]
+         -> IR.Qualified
+         -> TC.Monad ()
+loadUnit knownModules sourcesMap stack modName = do
+    when (modName `elem` stack) $
+        Exception.throw $ ImportsCycleError $ modName : stack :: TC.Monad ()
+
+    srcPath <- Exception.fromJust
+        (UnitSourcesNotFound stack modName)
+        (Map.lookup modName sourcesMap)
+
+    unitRef <- readUnit srcPath modName
     Scheduler.modifyAttr_ @UnitRefsMap $ wrapped . at modName .~ Just unitRef
 
-    traverse_ (loadUnitIfMissing knownModules sourcesMap (modName : stack)) (unwrap imports)
+    traverse_
+        (loadUnitIfMissing knownModules sourcesMap (modName : stack))
+        (unwrap $ unitRef ^. Unit.imports)
 

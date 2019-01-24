@@ -55,4 +55,3 @@ lookup s n = (Set.member n $ view local s) || (Set.member n $ view global s) ; {
 -- === Instances === --
 
 instance Default Reserved where def = Reserved def def ; {-# INLINE def #-}
-

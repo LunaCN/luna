@@ -3,7 +3,9 @@ module Luna.Shell.Command where
 import Prologue hiding (init)
 
 import qualified Control.Exception                  as Exception
+import qualified Control.Exception.Safe             as Safe
 import qualified Control.Monad.Exception            as MException
+import qualified Control.Monad.Exception.IO         as MException
 import qualified Control.Monad.State.Layered        as State
 import qualified Data.Version                       as Version
 import qualified Data.Yaml                          as Yaml
@@ -16,6 +18,7 @@ import qualified Luna.Package.Structure.Generate    as Generate
 import qualified Luna.Package.Structure.Name        as Package
 import qualified Luna.Shell.CWD                     as CWD
 import qualified Luna.Shell.Interpret               as Interpret
+import qualified Luna.Shell.GenerateDocumentation   as GenerateDocumentation
 import qualified Path                               as Path
 import qualified System.Directory                   as Directory
 import qualified System.Info                        as Info
@@ -23,6 +26,8 @@ import qualified Text.Megaparsec                    as Megaparsec
 
 import Control.Lens.Prism      (_Just)
 import Control.Monad.Exception (MonadException)
+import Path                    (Path, Abs, Dir)
+import System.Exit             (die)
 import System.FilePath         ((</>))
 import System.IO               (hPutStrLn, stderr)
 
@@ -34,7 +39,7 @@ import System.IO               (hPutStrLn, stderr)
 -- === Definition === --
 type ConfigStateIO m =
     ( MonadIO m
-    , State.MonadStates '[Global.Config, Local.Config] m)
+    , State.MonadStates '[Global.Config, Local.Config] m )
 
 
 
@@ -49,12 +54,24 @@ newtype RunOpts = RunOpts
     } deriving (Eq, Generic, Ord, Show)
 makeLenses ''RunOpts
 
+data DocumentOpts = DocumentOpts
+    { __target :: FilePath
+    , __out    :: FilePath
+    } deriving (Eq, Generic, Ord, Show)
+makeLenses ''DocumentOpts
+
 data InitOpts = InitOpts
     { _name            :: String
     , _lunaVersion     :: String
     , _licenseOverride :: String
     } deriving (Eq, Generic, Ord, Show)
 makeLenses ''InitOpts
+
+data RenameOpts = RenameOpts
+    { _srcName  :: String
+    , _destName :: String
+    } deriving (Eq, Generic, Ord, Show)
+makeLenses ''RenameOpts
 
 data BuildOpts = BuildOpts
     { __acquireDeps        :: Bool
@@ -122,13 +139,14 @@ makeLenses ''DownloadOpts
 data Command
     = Build BuildOpts
     | Clean CleanOpts
-    | Doc
+    | Document DocumentOpts
     | Download DownloadOpts
     | Freeze FreezeOpts
     | Init InitOpts
     | Install InstallOpts
     | Options OptionOpts
     | Publish PublishOpts
+    | Rename RenameOpts
     | Retract RetractOpts
     | Rollback RollbackOpts
     | Run RunOpts
@@ -170,8 +188,8 @@ run (RunOpts target) = liftIO $ catch compute recover where
             cwd <- CWD.get
             runPackage cwd
 
-    -- FIXME This can be done much better.
-    recover (e :: SomeException) = hPutStrLn stderr $ displayException e
+    -- FIXME [Ara] This can be done much better.
+    recover (e :: SomeException) = die (displayException e)
 
     runPackage path = do
         packagePath   <- Path.parseAbsDir path
@@ -194,12 +212,7 @@ init opts = do
             $ view licenseOverride opts
 
     Generate.genPackageStructure (view name opts) mLicense globalCfg >>= \case
-        Left err -> case err of
-            Generate.InvalidPackageLocation msg -> putStrLn msg
-            Generate.InvalidPackageName _       -> putStrLn
-                $ view name opts <> " is not a valid package name."
-            Generate.SystemError msg -> putStrLn
-                $ "System Error: " <> convert msg
+        Left err -> liftIO . hPutStrLn stderr $ displayException err
         Right projectPath -> putStrLn
             $ "Initialised package at " <> projectPath
 
@@ -219,6 +232,38 @@ version = putStrLn versionMsg where
         <> "latest on " <> GitHash.giCommitDate gitInfo
         <> "]"
     isDirty = if GitHash.giDirty gitInfo then "Dirty" else "Clean"
+
+rename :: forall m . ( ConfigStateIO m
+                     , MonadException Path.PathException m )
+    => RenameOpts -> m ()
+rename opts = MException.catch printRenameEx . MException.catch printPNFEx $ do
+    let sourceDir = opts ^. srcName
+        targetDir = opts ^. destName
+
+    canonicalSource <- getPath sourceDir
+    canonicalTarget <- getPath targetDir
+
+    (resultPath, err) <- Package.rename canonicalSource canonicalTarget
+
+    case err of
+        Nothing -> pure ()
+        Just ex -> liftIO . hPutStrLn stderr $ displayException ex
+
+    putStrLn $ "Package renamed to " <> Path.fromAbsDir resultPath
+
+    where
+        printRenameEx :: Package.RenameException -> m ()
+        printRenameEx e = liftIO . hPutStrLn stderr $ displayException e
+
+        printPNFEx :: (MonadIO n, MonadException Package.RenameException n)
+            => Package.PackageNotFoundException -> n ()
+        printPNFEx e = liftIO . hPutStrLn stderr $ displayException e
+
+        getPath :: (MonadIO n, MonadException Path.PathException n)
+            => FilePath -> n (Path Abs Dir)
+        getPath fp = MException.rethrowFromIO @Path.PathException $ do
+            canonicalPath <- liftIO $ Directory.canonicalizePath fp
+            Path.parseAbsDir canonicalPath
 
 
 
@@ -240,38 +285,42 @@ runLuna input = case input of
         -- Defaulting to be filled later where relevant.
         let localConfig = def @Local.Config
 
-        (flip State.evalT) localConfig $ (flip State.evalT) globalConfig $
-            case command of
-                Build    _ -> putStrLn
+        (flip State.evalT) localConfig . (flip State.evalT) globalConfig
+            $ case command of
+                Build    _    -> putStrLn
                     "Building of executables is not yet implemented."
-                Clean    _ -> putStrLn
+                Clean    _    -> putStrLn
                     "Cleaning build artefacts is not yet implemented."
-                Doc        -> putStrLn
-                    "Building documentation is not yet implemented."
-                Download _ -> putStrLn
+                Document opts -> do
+                    let DocumentOpts tgt out = opts
+                    liftIO $ GenerateDocumentation.generateDocumentation out tgt
+                Download _    -> putStrLn
                     "Downloading of packages is not yet implemented."
-                Freeze   _ -> putStrLn
+                Freeze   _    -> putStrLn
                     "Freezing package dependencies is not yet implemented."
-                Init opts  -> MException.catch (\(e :: Path.PathException) ->
+                Init opts     -> MException.catch (\(e :: Path.PathException) ->
                     liftIO . hPutStrLn stderr $ displayException e) (init opts)
-                Install  _ -> putStrLn
+                Install  _    -> putStrLn
                     "Installing dependencies is not yet implemented."
-                Options  _ -> putStrLn
+                Options  _    -> putStrLn
                     "Setting compiler options is not yet implemented."
-                Publish  _ -> putStrLn
+                Publish  _    -> putStrLn
                     "Publishing packages is not yet implemented."
-                Retract  _ -> putStrLn
+                Rename opts   -> MException.catch (\(e:: Path.PathException) ->
+                    liftIO . hPutStrLn stderr $ displayException e)
+                    (rename opts)
+                Retract  _    -> putStrLn
                     "Retraction of package versions is not yet implemented."
-                Rollback _ -> putStrLn
+                Rollback _    -> putStrLn
                     "Rolling back dependencies is not yet implemented."
-                Run opts   -> run opts
-                Test     _ -> putStrLn
+                Run opts      -> run opts
+                Test     _    -> putStrLn
                     "Executing test suites is not yet implemented."
-                Unfreeze _ -> putStrLn
+                Unfreeze _    -> putStrLn
                     "Unfreezing package dependencies is not yet implemented."
-                Update   _ -> putStrLn
+                Update   _    -> putStrLn
                     "Updating package dependencies is not yet implemented."
-                None       -> putStrLn "Command None. Should never happen."
+                None          -> putStrLn "Command None. Should never happen."
     ShowVersion -> version
 
 acquireGlobalConfig :: forall m . MonadIO m => m (Either Text Global.Config)

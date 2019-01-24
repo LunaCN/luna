@@ -19,6 +19,8 @@ native class Int:
     def <  that: primIntLt       self that
     # Integer equality. `a.== b` returns True when `a` equals `b`.
     def == that: primIntEquals   self that
+    # Absolute value.
+    def abs: if self < 0 then self.negate else self
 
     def toInt: self
 
@@ -60,6 +62,8 @@ native class Int:
     # `x.shift i` shifts x left by i bits if it is positive, or right by -i otherwise.
     def shift that: primIntShift self that
 
+    def toLQueryValue: ValInt self
+
 # Class representing floating point numbers.
 native class Real:
     # Floating point addition.
@@ -80,6 +84,10 @@ native class Real:
     def <  that: primRealLt       self that
     # Tests whether `self` is equal to the argument.
     def == that: primRealEquals   self that
+    # Absolute value.
+    def abs: if self < 0 then self.negate else self
+
+    def toReal: self
 
     # Negation. `a.negate == -1.0 * a`
     def negate:     primRealNegate self
@@ -131,6 +139,8 @@ native class Real:
     def shortRep: self.toText
     # Converts a number to `JSON`.
     def toJSON: JSONNumber (primRealToScientific self)
+
+    def toLQueryValue: ValReal self
 
 # The mathematical constant π = 3.14159265359.
 def pi: 3.14159265359
@@ -201,6 +211,8 @@ native class Text:
         Nothing:  errorStr ("Could not convert " + self + " to a Real")
 
     def addPathSegment segment: self + pathSeparator + segment
+
+    def toLQueryValue: ValText self
 
 # Class for representing arbitrary binary data. Does not attempt to interpret the data in any way.
 native class Binary:
@@ -1056,7 +1068,6 @@ class JSON:
     # Dumps a `JSON` structure into a `Text` object.
     def render: self.toText
 
-    def toBinary: self.toText.toBinary
     # Short text representation for a `JSON` object.
     def shortRep: self.render
 
@@ -1406,3 +1417,78 @@ def bracket before after thing:
         Left error: throw error
         Right value: value
 
+class LQueryValue:
+    ColumnRef      Texts
+    ValText        Text
+    ValInt         Int
+    ValReal        Real
+    ValTimestampNs Int
+    Operation Text (List LQueryValue)
+    Condition Predicate LQueryValue LQueryValue
+
+    # Serializes an LQuery value to its JSON representation.
+    # Note: the JSON representation is meant to allow passing LQuery values to
+    # third-party components (like Dataframes library).
+    # Changing serialization scheme here will require adjusting that components
+    # as well.
+    def toJSON: case self of
+        ColumnRef        n: JSON.empty . insert "column" n
+        ValText          t: t.toJSON
+        ValInt           i: i.toJSON
+        ValReal          r: r.toJSON
+        ValTimestampNs   t: JSON.empty.insert "timestampNs" t
+        Operation   n args: JSON.empty.insert "operation" n . insert "arguments" args
+        Condition pred a b: JSON.empty.insert "condition" pred . insert "onTrue" a . insert "onFalse" b
+
+    # Tests if argument is prefix of this value.
+    # Allowed only for Text-yielding values.
+    def startsWith t:  Predicate "startsWith" [self, t.toLQueryValue]
+
+    # Tests if argument being a regexp string matches the current value.
+    # Supported syntax is based on ECMAScript and UNIX regexp grammar.
+    # Allowed only for Text-yielding values.
+    def matches regex: Predicate "matches"    [self, regex.toLQueryValue]
+
+    def >  that: Predicate "gt" [self, that.toLQueryValue]
+    def == that: Predicate "eq" [self, that.toLQueryValue]
+    def <  that: Predicate "lt" [self, that.toLQueryValue]
+
+    def + that: Operation "plus"   [self, that.toLQueryValue]
+    def - that: Operation "minus"  [self, that.toLQueryValue]
+    def * that: Operation "times"  [self, that.toLQueryValue]
+    def / that: Operation "divide" [self, that.toLQueryValue]
+    def % that: Operation "mod"    [self, that.toLQueryValue]
+    def abs   : Operation "abs"    [self]
+    def negate: Operation "negate" [self]
+
+    # Extract day of month (counted from 1) in the Gregorian calendar.
+    # Allowed only for Timestamp-yielding values;
+    def day:   Operation "day"   [self]
+    # Extract month in the Gregorian calendar.
+    # Allowed only for Timestamp-yielding values;
+    def month: Operation "month" [self]
+    # Extract year in the Gregorian calendar.
+    # Allowed only for Timestamp-yielding values;
+    def year:  Operation "year"  [self]
+
+    def toLQueryValue: self
+
+# NOTE: the `a` type parameter is a workaround for typechecker limitation
+# (LQueryValue.toJSON and Predicate.toJSON are xplicitly corecursive)
+# In future `a` should be just replaced with LQueryValue.
+class Predicate a:
+    Predicate Text (List a)
+    Boolean   Text (List Predicate)
+
+    def and that: Boolean "and" [self, that]
+    def or  that: Boolean "or"  [self, that]
+    def not:      Boolean "not" [self]
+    def switch a b: Condition self a.toLQueryValue b.toLQueryValue
+
+    def toJSON: case self of
+        Predicate t args: JSON.empty.insert "predicate" t . insert "arguments" args
+        Boolean t args: JSON.empty.insert "boolean" t . insert "arguments" args
+
+class TableHandle:
+    def at name:
+        ColumnRef name

@@ -9,6 +9,7 @@ library:
     source-dirs:
         - src
     dependencies:
+        - aeson
         - base
         - bimap
         - containers
@@ -23,12 +24,12 @@ library:
         - luna-passes
         - luna-runtime
         - luna-stdlib
-        - luna-syntax-text-parser
         - megaparsec
         - mtl
         - optparse-applicative
         - path
         - prologue
+        - safe-exceptions
         - text
         - unordered-containers
         - yaml

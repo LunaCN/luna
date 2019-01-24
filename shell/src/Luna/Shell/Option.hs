@@ -31,7 +31,11 @@ lunaCommand = Command.Exec <$> Options.hsubparser
     (  Options.command "run" (Options.info run
         (Options.progDesc "Execute a luna package, or standalone file."))
     <> Options.command "init" (Options.info init
-        (Options.progDesc "Initialise a new luna package.")))
+        (Options.progDesc "Initialise a new luna package."))
+    <> Options.command "document" (Options.info document
+        (Options.progDesc "Print documentation in JSON format."))
+    <> Options.command "rename" (Options.info rename
+        (Options.progDesc "Rename a package.")))
 
 run :: Parser Command
 run = Command.Run <$> (Command.RunOpts
@@ -39,8 +43,17 @@ run = Command.Run <$> (Command.RunOpts
         <> Options.metavar "FILE/FOLDER" <> Options.value ""
         <> Options.help "Execute FILE/FOLDER in interpreted mode."))
 
+document :: Parser Command
+document = Command.Document <$> (Command.DocumentOpts
+    <$> Options.strOption (Options.long "target"
+        <> Options.metavar "PROJECT" <> Options.value ""
+        <> Options.help "Create documentation for PROJECT.")
+    <*> Options.strOption (Options.long "out"
+        <> Options.metavar "FILE" <> Options.value ""
+        <> Options.help "Specify the output file"))
+
 init :: Parser Command
-init = Command.Init <$> ( Command.InitOpts
+init = Command.Init <$> (Command.InitOpts
     <$> Options.argument Options.str (Options.metavar "PACKAGE-NAME")
     <*> Options.strOption (Options.long "luna-version"
         <> Options.metavar "VERSION" <> Options.value ""
@@ -49,6 +62,11 @@ init = Command.Init <$> ( Command.InitOpts
     <*> Options.strOption (Options.long "license"
         <> Options.metavar "LICENSE" <> Options.value ""
         <> Options.help "Initialise the package with the specified license."))
+
+rename :: Parser Command
+rename = Command.Rename <$> ( Command.RenameOpts
+    <$> Options.argument Options.str (Options.metavar "SOURCE-NAME")
+    <*> Options.argument Options.str (Options.metavar "DEST-NAME"))
 
 build :: Parser Command
 build = Command.Build <$> (Command.BuildOpts

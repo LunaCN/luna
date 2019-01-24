@@ -16,4 +16,3 @@ newtype LastOffset = LastOffset Delta deriving (Show)
 makeLenses ''LastOffset
 
 instance Default LastOffset where def = LastOffset mempty
-

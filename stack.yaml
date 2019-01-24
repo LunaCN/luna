@@ -36,6 +36,7 @@ packages:
     - syntax/text/lexer
     - syntax/text/model
     - syntax/text/parser
+    - syntax/text/builder
     - syntax/text/prettyprint
 
     - lib/autovector

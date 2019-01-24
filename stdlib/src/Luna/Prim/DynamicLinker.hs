@@ -19,6 +19,7 @@ import           Data.Maybe             (maybeToList)
 import qualified Data.Text              as Text
 import           Foreign                (FunPtr)
 import qualified Foreign
+import qualified Luna.Package           as Package
 import qualified Safe
 import qualified System.Directory       as Dir
 import qualified System.Environment     as Env
@@ -67,6 +68,12 @@ findLocalNativeLibsDirs projectDir = do
             return $ fmap (\a -> localDepsDir </> a </> nativeLibs) dirs
                   <> concat localNativeDirs
 
+findNativeLibsDirsForProject :: FilePath -> IO [FilePath]
+findNativeLibsDirsForProject projectDir = do
+    let projectNativeDirs =  projectDir </> nativeLibs
+    projectLocalDirs      <- findLocalNativeLibsDirs projectDir
+    return $ projectNativeDirs : projectLocalDirs
+
 tryLoad :: FilePath -> IO (Either String Handle)
 tryLoad path = do
     loadRes <- tryAny $ nativeLoadLibrary path
@@ -83,9 +90,10 @@ parseError e = if ((length $ snd partitioned) == 0) then
 
 loadLibrary :: String -> IO Handle
 loadLibrary namePattern = do
-    projectDir <- Dir.getCurrentDirectory
-    nativeDirs <- ((projectDir </> nativeLibs) :)
-              <$> findLocalNativeLibsDirs projectDir
+    projectDir   <- Dir.getCurrentDirectory
+    includedLibs <- map snd <$> Package.includedLibs
+    nativeDirs   <- fmap concat $
+        mapM findNativeLibsDirsForProject (projectDir : includedLibs)
     let possibleNames = [ prefix <> namePattern <> extension
                         | prefix    <- ["lib", ""]
                         , extension <- dynamicLibraryExtensions
@@ -103,7 +111,8 @@ loadLibrary namePattern = do
                <> [ extension | extension <- dynamicLibraryExtensions,
                                 not (null extension)
                   ]
-    linkerCache <- maybeToList <$> nativeLoadFromCache library
+    linkerCache <- maybeToList <$> nativeLoadFromCache library `catchAny`
+        const (return Nothing)
     extendedSearchPaths <- fmap concat . for nativeSearchPaths $ \path -> do
         files <- Dir.listDirectory path `catchAny` \_ -> return []
         let matchingFiles = filter (List.isInfixOf library) files

@@ -2,24 +2,29 @@ module Luna.Package where
 
 import Prologue
 
-import qualified Control.Exception.Safe           as SafeException
-import qualified Control.Monad.Exception          as Exception
-import qualified Control.Monad.Exception.IO       as Exception
-import qualified Data.Bimap                       as Bimap
-import qualified Data.Map                         as Map
-import qualified Data.Yaml                        as Yaml
-import qualified Luna.Package.Configuration.Local as Local
-import qualified Luna.Package.Structure.Name      as Name
-import qualified Luna.Package.Structure.Utilities as Structure
-import qualified OCI.Data.Name                    as Name
-import qualified Path                             as Path
-import qualified System.Directory                 as Directory
-import qualified System.Environment               as Environment
-import qualified System.FilePath                  as FilePath
-import qualified System.FilePath.Find             as Find
+import qualified Control.Exception                        as Unsafe
+import qualified Control.Exception.Safe                   as Safe
+import qualified Control.Monad.Exception                  as Exception
+import qualified Control.Monad.Exception.IO               as Exception
+import qualified Data.Bimap                               as Bimap
+import qualified Data.Map                                 as Map
+import qualified Data.Yaml                                as Yaml
+import qualified Luna.Package.Configuration.Local         as Local
+import qualified Luna.Package.Structure.Generate.Internal as Generate
+import qualified Luna.Package.Structure.Name              as Name
+import qualified Luna.Package.Structure.Utilities         as Structure
+import qualified Luna.Package.Utilities                   as Utilities
+import qualified OCI.Data.Name                            as Name
+import qualified Path                                     as Path
+import qualified System.Directory                         as Directory
+import qualified System.Environment                       as Environment
+import qualified System.FilePath                          as FilePath
+import qualified System.FilePath.Find                     as Find
 
 import Control.Arrow           ((&&&))
+import Control.Monad           (filterM)
 import Control.Monad.Exception (MonadExceptions, MonadException)
+import Data.Char               (isUpper)
 import Data.Bimap              (Bimap)
 import Data.Map                (Map)
 import Path                    (Path, Abs, Rel, File, Dir, (</>))
@@ -57,11 +62,13 @@ instance Exception PackageNotFoundException where
 -- === Definition === --
 
 data RenameException
-    = InvalidName Text
-    | InaccessiblePath (Path Abs Dir)
-    | InaccessibleFile (Path Abs File)
+    = InvalidName       Text
+    | InaccessiblePath  (Path Abs Dir)
+    | InaccessibleFile  (Path Abs File)
     | DestinationExists (Path Abs Dir)
-    deriving (Eq, Generic, Ord, Show)
+    | CannotDelete      (Path Abs Dir)  SomeException
+    | CannotRenameFile  (Path Abs File) SomeException
+    deriving (Generic, Show)
 
 
 -- === Instances === --
@@ -72,6 +79,11 @@ instance Exception RenameException where
     displayException (InaccessiblePath path) = show path <> " is inaccessible."
     displayException (InaccessibleFile file) = show file <> " is inaccessible."
     displayException (DestinationExists path) = show path <> " already exists."
+    displayException (CannotDelete path ex) = "Cannot delete" <> show path
+        <> ": " <> displayException ex
+    displayException (CannotRenameFile file ex) = "Cannot rename " <> show file
+        <> ": " <> displayException ex
+
 
 
 -----------------
@@ -102,7 +114,7 @@ findPackageFileForFile = findPackageFile . Path.parent
 getRelativePathForModule :: (MonadIO m, MonadCatch m) => Path Abs File
     -> Path Abs File -> m (Maybe (Path Rel File))
 getRelativePathForModule packageFile =
-    fmap eitherToMaybe . SafeException.try . Path.stripProperPrefix
+    fmap eitherToMaybe . Safe.try . Path.stripProperPrefix
         (Path.parent $ Path.parent packageFile)
     where
         eitherToMaybe :: Either Path.PathException (Path Rel File)
@@ -111,24 +123,26 @@ getRelativePathForModule packageFile =
 
 getLunaPackagesFromDir :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs Dir -> m [Path Abs File]
-getLunaPackagesFromDir dir = Exception.rethrowFromIO @Path.PathException $ do
+getLunaPackagesFromDir dir = do
     let configDirPath = dir </> Name.configDirectory
-    hasConfigDir  <- liftIO . Directory.doesDirectoryExist $ Path.toFilePath
-        configDirPath
+    hasConfigDir  <- Exception.rethrowFromIO @Path.PathException
+        . Directory.doesDirectoryExist $ Path.toFilePath configDirPath
 
     if not hasConfigDir then tryConvertPackageFormat dir else do
         filesInDir <- liftIO $ Directory.listDirectory
             (Path.toFilePath configDirPath)
-        files      <- mapM Path.parseRelFile filesInDir
+        files      <- Exception.rethrowFromIO @Path.PathException
+            $ mapM Path.parseRelFile filesInDir
 
         pure . fmap (configDirPath </>) $ filter
             (\file -> Path.fileExtension file == Name.packageExt) files
 
 tryConvertPackageFormat :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs Dir -> m [Path Abs File]
-tryConvertPackageFormat dir = Exception.rethrowFromIO @Path.PathException $ do
+tryConvertPackageFormat dir = do
     filesInDir <- liftIO $ Directory.listDirectory (Path.toFilePath dir)
-    files      <- mapM Path.parseRelFile filesInDir
+    files      <- Exception.rethrowFromIO @Path.PathException
+        $ mapM Path.parseRelFile filesInDir
     let configFiles = filter
             (\file -> Path.fileExtension file == Name.packageExt) files
     case configFiles of
@@ -141,7 +155,7 @@ tryConvertPackageFormat dir = Exception.rethrowFromIO @Path.PathException $ do
                 Directory.copyFile
                     (Path.toFilePath $ dir </> file)
                     (Path.toFilePath $ configDirPath </> file)
-                SafeException.tryAny $ Directory.removeFile
+                Safe.tryAny $ Directory.removeFile
                     (Path.toFilePath $ dir </> file)
             pure $ map (configDirPath </>) files
 
@@ -183,52 +197,68 @@ assignQualName pkg filePath = (filePath, qualName)
 
 findPackageSources :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs Dir -> m (Bimap (Path Abs File) Name.Qualified)
-findPackageSources pkg = Exception.rethrowFromIO @Path.PathException $ do
+findPackageSources pkg = do
     let srcDir            = Path.toFilePath $ pkg </> Name.sourceDirectory
         lunaFilePredicate = Find.extension Find.~~? Name.lunaFileExt
     lunaFiles    <- liftIO $ Find.find Find.always lunaFilePredicate srcDir
-    lunaFilesAbs <- mapM Path.parseAbsFile lunaFiles
+    lunaFilesAbs <- Exception.rethrowFromIO @Path.PathException
+        $ mapM Path.parseAbsFile lunaFiles
     let modules  = assignQualName pkg <$> lunaFilesAbs
     pure $ Bimap.fromList modules
 
 listDependencies :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs Dir -> m [(Name.Name, FilePath.FilePath)]
-listDependencies pkgSrc = Exception.rethrowFromIO @Path.PathException $ do
+listDependencies pkgSrc = do
     let lunaModules     = pkgSrc </> Name.localLibsPath
         lunaModulesPath = Path.toFilePath lunaModules
-    dependencies <- liftIO . SafeException.tryAny
+    dependencies <- liftIO . Safe.tryAny
         $ Directory.listDirectory lunaModulesPath
     case dependencies of
         Left _           -> pure []
         Right directDeps -> do
             indirectDeps <- for directDeps $ \proj -> do
-                path <- Path.parseRelDir proj
+                path <- Exception.rethrowFromIO @Path.PathException
+                    $ Path.parseRelDir proj
                 listDependencies (lunaModules </> path)
             pure $ fmap (convert &&& (lunaModulesPath FilePath.</>)) directDeps
                   <> concat indirectDeps
 
+includedLibs :: MonadIO m => m [(Name.Name, FilePath.FilePath)]
+includedLibs = do
+    lunaroot     <- liftIO $ Directory.canonicalizePath
+        =<< Environment.getEnv Name.lunaRootEnv
+    projectNames <- liftIO $ do
+        contents <- Directory.listDirectory lunaroot
+        dirs     <- filterM
+            (\a -> Directory.doesDirectoryExist $ lunaroot FilePath.</> a) contents
+        let projects = filter
+                (\a -> (isUpper <$> head a) == Just True) dirs
+        pure projects
+    for projectNames $ \projectName ->
+        let separator = [FilePath.pathSeparator]
+        in pure (convert projectName, lunaroot
+                                    <> separator
+                                    <> projectName
+                                    <> separator)
+
 packageImportPaths :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs Dir -> m [(Name.Name, FilePath.FilePath)]
 packageImportPaths pkgRoot = do
-    lunaroot     <- liftIO $ Directory.canonicalizePath
-        =<< Environment.getEnv Name.lunaRootEnv
-    dependencies <- listDependencies pkgRoot
-    let importPaths = ("Std", lunaroot <> "/Std/")
-                    : (getPackageName &&& Path.toFilePath) pkgRoot
+    dependencies    <- listDependencies pkgRoot
+    includedImports <- includedLibs
+    let importPaths = (getPackageName &&& Path.toFilePath) pkgRoot
                     : dependencies
-    pure importPaths
+    pure $ includedImports <> importPaths
 
 fileSourcePaths :: (MonadIO m, MonadException Path.PathException m)
     => Path Abs File -> m (Map Name.Qualified FilePath.FilePath)
-fileSourcePaths lunaFile = Exception.rethrowFromIO @Path.PathException $ do
-    lunaRoot <- liftIO $ Directory.canonicalizePath
-        =<< Environment.getEnv Name.lunaRootEnv
+fileSourcePaths lunaFile = do
     let fileName    = FilePath.dropExtension . Path.fromRelFile
             $ Path.filename lunaFile
-        fileImports :: [(Name.Name, FilePath.FilePath)]
-        fileImports = [("Std", lunaRoot <> "/Std/")]
+    fileImports <- includedLibs
 
-    importPaths   <- sequence $ Path.parseAbsDir . snd <$> fileImports
+    importPaths   <- Exception.rethrowFromIO @Path.PathException . sequence
+        $ Path.parseAbsDir . snd <$> fileImports
     importSources <- sequence $ findPackageSources <$> importPaths
 
     let projSrcMap = Map.map Path.toFilePath $ foldl' Map.union Map.empty
@@ -255,8 +285,8 @@ rename :: ( MonadIO m
           , MonadExceptions '[ PackageNotFoundException
                              , RenameException
                              , Path.PathException] m )
-    => Path Abs Dir -> Path Abs Dir -> m (Path Abs Dir)
-rename src target = Exception.rethrowFromIO @Path.PathException $ do
+    => Path Abs Dir -> Path Abs Dir -> m (Path Abs Dir, Maybe RenameException)
+rename src target = do
     let srcPath  = Path.fromAbsDir src
         destPath = Path.fromAbsDir target
 
@@ -275,32 +305,68 @@ rename src target = Exception.rethrowFromIO @Path.PathException $ do
     unless_ isValidPkgName . Exception.throw . InvalidName $ convert newName
 
     -- Guaranteed to be in a package by now so default value is nonsensical
-    defaultDir     <- Directory.getCurrentDirectory
-    defaultDirPath <- Path.parseAbsDir defaultDir
+    defaultDir     <- liftIO $ Directory.getCurrentDirectory
+    defaultDirPath <- Exception.rethrowFromIO @Path.PathException
+        $ Path.parseAbsDir defaultDir
     srcPackageRoot <- fromJust defaultDirPath <$> findPackageRoot src
     originalName   <- name srcPackageRoot
 
-    liftIO $ Directory.renameDirectory (Path.fromAbsDir srcPackageRoot) destPath
+    -- Determine things to copy and copy/create them
+    let recursiveListDir dir = do
+            contents <- map (dir `FilePath.combine`)
+                <$> (liftIO $ Directory.listDirectory dir)
+            (files, dirs) <- Utilities.partitionM
+                (liftIO . Directory.doesFileExist) contents
+            (recFiles, recDirs) <- fmap unzip $ mapM recursiveListDir dirs
+            pure (files <> concat recFiles, dirs <> concat recDirs)
+
+    (filesToCopy, dirsToCreate) <- recursiveListDir srcPath
+
+    for_ dirsToCreate $ \dir -> do
+        let relPath = FilePath.makeRelative srcPath dir
+        liftIO . Directory.createDirectoryIfMissing True
+            $ destPath `FilePath.combine` relPath
+
+    for_ filesToCopy $ \file -> do
+        let relPath = FilePath.makeRelative srcPath file
+        liftIO . Directory.copyFile file $ destPath `FilePath.combine` relPath
 
     -- Rename the `*.lunaproject` file
-    origProjFile <- Path.parseRelFile $ convert originalName <> Name.packageExt
+    origProjFile <- Exception.rethrowFromIO @Path.PathException
+        . Path.parseRelFile $ convert originalName <> Name.packageExt
     newName      <- name target
-    newProjFile  <- Path.parseRelFile $ convert newName <> Name.packageExt
+    newProjFile  <- Exception.rethrowFromIO @Path.PathException
+        . Path.parseRelFile $ convert newName <> Name.packageExt
 
     let origProjPath = target </> Name.configDirectory </> origProjFile
         newProjPath  = target </> Name.configDirectory </> newProjFile
 
-    liftIO $ Directory.renameFile (Path.fromAbsFile origProjPath)
+    -- TODO [Ara] Fix MonadException and move back to that Exception.CatchAll
+    liftIO . Unsafe.handle (\(e :: SomeException) ->
+            Exception.throw $ CannotRenameFile newProjPath e)
+        $ Directory.renameFile (Path.fromAbsFile origProjPath)
         (Path.fromAbsFile newProjPath)
 
     -- Change the name in the `config.yaml` file
-    configName <- Path.parseRelFile Name.configFile
-    let configPath = target </> Name.configDirectory </> configName
+    configName <- Exception.rethrowFromIO @Path.PathException
+        $ Path.parseRelFile Name.configFile
+    let configDir  = target </> Name.configDirectory
+        configPath = configDir </> configName
 
-    Yaml.decodeFileEither (Path.fromAbsFile configPath) >>= \case
-        Left _    -> Exception.throw $ InaccessibleFile configPath
-        Right cfg -> Yaml.encodeFile (Path.fromAbsFile configPath) $
+    decoded <- liftIO $ Yaml.decodeFileEither (Path.fromAbsFile configPath)
+
+    -- Generates a super default config if none exists
+    case decoded of
+        Left _    -> liftIO . Generate.packageConfig Nothing (convert newName)
+            "" "" $ Path.fromAbsDir configDir
+        Right cfg -> liftIO . Yaml.encodeFile (Path.fromAbsFile configPath) $
             cfg & Local.projectName .~ newName
 
-    pure target
+    -- Bubble up an error if the original directory can't be removed.
+    liftIO . Unsafe.handle (\(e :: SomeException) ->
+            pure (target, Just (CannotDelete src e))) $ do
+        Directory.removeDirectoryRecursive srcPath
+        pure (target, Nothing)
+
+    pure (target, Nothing)
 
