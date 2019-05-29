@@ -5,7 +5,16 @@ trigger:
     include: [ "*" ]
   paths:
     exclude:
+      - .github/*
       - doc/*
+      - .gitignore
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - LICENSE
+      - README.md
+
+
+pr: none
 
 jobs:
 - job: Ubuntu
