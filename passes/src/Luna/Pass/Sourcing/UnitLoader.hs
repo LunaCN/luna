@@ -6,23 +6,24 @@ module Luna.Pass.Sourcing.UnitLoader where
 
 import Prologue hiding (init)
 
-import qualified Control.Monad.Exception              as Exception
-import qualified Data.Graph.Data.Layer.Layout         as Layout
-import qualified Data.Map                             as Map
-import qualified Data.Set                             as Set
-import qualified Luna.IR                              as IR
-import qualified Luna.Pass.Data.Stage                 as TC
-import qualified Luna.Pass.Scheduler                  as Scheduler
-import qualified Luna.Syntax.Text.Parser.State.Result  as Parser
-import qualified Luna.Syntax.Text.Parser.State.Invalid as Parser
-import qualified Luna.Pass.Parsing.Parser             as Parser
-import qualified Luna.Syntax.Text.Source              as Parser
-import qualified System.IO                            as IO
+import qualified Control.Monad.Exception                as Exception
+import qualified Data.Graph.Data.Layer.Layout           as Layout
+import qualified Data.Map                               as Map
+import qualified Data.Set                               as Set
+import qualified Luna.IR                                as IR
+import qualified Luna.Pass.Data.Stage                   as TC
+import qualified Luna.Pass.Scheduler                    as Scheduler
+import qualified Luna.Syntax.Text.Parser.State.Result   as Parser
+import qualified Luna.Syntax.Text.Parser.State.Invalid  as Parser
+import qualified Luna.Pass.Parsing.Parser               as Parser
+import qualified Luna.Syntax.Text.Source                as Parser
+import qualified System.IO                              as IO
 
 import Data.Set                             (Set)
 import Luna.Pass.Data.Root
 import Luna.Pass.Sourcing.Data.Unit as Unit
 import Luna.Pass.Sourcing.ImportsPlucker
+import Path
 
 type UnitRequestStack = [IR.Qualified]
 
@@ -55,7 +56,7 @@ resetParserState = do
     Scheduler.enableAttrByType @Imports
 
 loadUnitIfMissing :: Set IR.Qualified
-                  -> Map.Map IR.Qualified FilePath
+                  -> Map.Map IR.Qualified (Path Abs File)
                   -> [IR.Qualified]
                   -> IR.Qualified
                   -> TC.Monad ()
@@ -65,12 +66,12 @@ loadUnitIfMissing = \knownModules sourcesMap stack modName -> do
         $ loadUnit knownModules sourcesMap stack modName
 
 readUnit
-    :: FilePath
+    :: Path Abs File
     -> IR.Qualified
     -> TC.Monad UnitRef
 readUnit srcPath _ = do
     resetParserState
-    fileHandle <- liftIO $ IO.openFile srcPath IO.ReadMode
+    fileHandle <- liftIO $ IO.openFile (Path.toFilePath srcPath) IO.ReadMode
     liftIO $ IO.hSetEncoding fileHandle IO.utf8
     src <- liftIO $ IO.hGetContents fileHandle
 
@@ -88,7 +89,7 @@ readUnit srcPath _ = do
     pure $ UnitRef (Unit.Graph $ Layout.unsafeRelayout root) imports
 
 loadUnit :: Set IR.Qualified
-         -> Map.Map IR.Qualified FilePath
+         -> Map.Map IR.Qualified (Path Abs File)
          -> [IR.Qualified]
          -> IR.Qualified
          -> TC.Monad ()

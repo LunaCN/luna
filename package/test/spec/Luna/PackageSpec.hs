@@ -15,6 +15,7 @@ import qualified System.IO.Temp                     as Temp
 
 import Luna.Package.Structure.Generate ( genPackageStructure )
 import Path                            ( Path, Abs, Dir )
+import Luna.Path.Path                  ( unsafeParseAbsDir )
 import System.FilePath                 ( FilePath, (</>) )
 import Test.Hspec                      ( Spec, Expectation, describe, it
                                        , shouldBe, shouldThrow, Selector )
@@ -36,12 +37,12 @@ packageBadName = "my_bad_package"
 
 shouldFailWithName :: FilePath -> Expectation
 shouldFailWithName name = Temp.withSystemTempDirectory "pkgTest" $ \dir ->
-    genPackageStructure (dir </> packageName) (Just License.MIT)
-        (def @Global.Config) >>= \case
+    genPackageStructure (unsafeParseAbsDir (dir </> packageName))
+        (Just License.MIT) (def @Global.Config) >>= \case
             Left ex    -> Exception.throw ex
             Right path -> do
-                origPath <- Path.parseAbsDir path
-                newPath  <- Path.parseAbsDir (dir </> name)
+                let origPath = path
+                let newPath  = unsafeParseAbsDir (dir </> name)
 
                 Package.rename origPath newPath `shouldThrow` renameException
 
@@ -50,11 +51,10 @@ hasName cfg name = cfg ^. Local.projectName `shouldBe` name
 
 shouldRenameWith :: FilePath -> Expectation
 shouldRenameWith name = Temp.withSystemTempDirectory "pkgTest" $ \dir ->
-    genPackageStructure (dir </> packageName) (Just License.MIT)
-        (def @Global.Config) >>= \case
+    genPackageStructure (unsafeParseAbsDir (dir </> packageName))
+        (Just License.MIT) (def @Global.Config) >>= \case
             Left ex    -> Exception.throw ex
-            Right path -> do
-                origPath <- Path.parseAbsDir path
+            Right origPath -> do
                 newPath  <- Path.parseAbsDir (dir </> name)
 
                 renameAndCheck name origPath newPath
@@ -66,11 +66,11 @@ renameAndCheck name origPath newPath = do
     renamedPath `shouldBe` newPath
 
     -- Check `config.yaml` has new name
-    let configPath = Path.fromAbsDir renamedPath
-            </> Path.fromRelDir Name.configDirectory
-            </> Name.configFile
+    let configPath = renamedPath
+            Path.</> Name.configDirectory
+            Path.</> Name.configFile
 
-    Yaml.decodeFileEither configPath >>= \case
+    Yaml.decodeFileEither (Path.fromAbsFile configPath) >>= \case
         Left _    -> True `shouldBe` False
         Right cfg ->
             cfg `hasName` convert name
@@ -78,39 +78,40 @@ renameAndCheck name origPath newPath = do
     -- Check `*.lunaproject` has been renamed
     let projPath = Path.fromAbsDir renamedPath
             </> Path.fromRelDir Name.configDirectory
-            </> name <> Name.packageExt
+            </> name <> Name.packageExtWithDot
 
     projExists <- Directory.doesFileExist projPath
     projExists `shouldBe` True
 
 movesAcrossDevicesTo :: FilePath -> Expectation
-movesAcrossDevicesTo newPathPart = Temp.withSystemTempDirectory "test" $ \src ->
-    genPackageStructure (src </> packageName) (Just License.MIT) def >>= \case
-        Left ex    -> Exception.throw ex
-        Right path -> Temp.withTempDirectory newPathPart "test" $ \dest -> do
-            let name = "NewName"
+movesAcrossDevicesTo newPathPart = Temp.withSystemTempDirectory "test"
+    $ \src -> genPackageStructure (unsafeParseAbsDir (src </> packageName))
+        (Just License.MIT) def >>= \case
+            Left ex    -> Exception.throw ex
+            Right origPath -> Temp.withTempDirectory newPathPart "test"
+                $ \dest -> do
+                    let name = "NewName"
 
-            origPath <- Path.parseAbsDir path
-            newPath  <- Path.parseAbsDir (dest </> name)
+                    newPath  <- Path.parseAbsDir (dest </> name)
 
-            renameAndCheck name origPath newPath
+                    renameAndCheck name origPath newPath
 
 renameMakesConfigIfMissing :: FilePath -> Expectation
 renameMakesConfigIfMissing name = Temp.withSystemTempDirectory "test" $ \src ->
-    genPackageStructure (src </> packageName) (Just License.MIT) def >>= \case
-        Left ex    -> Exception.throw ex
-        Right path -> do
-            -- Remove the *.lunaproject file
-            let projPath = path </> Path.fromRelDir Name.configDirectory
-                    </> Name.configFile
+    genPackageStructure (unsafeParseAbsDir (src </> packageName))
+        (Just License.MIT) def >>= \case
+            Left ex    -> Exception.throw ex
+            Right origPath -> do
+                -- Remove the *.lunaproject file
+                let projPath =  origPath Path.</> Name.configDirectory
+                                Path.</> Name.configFile
 
-            Directory.removeFile projPath
+                Directory.removeFile (Path.fromAbsFile projPath)
 
-            -- Create new paths
-            origPath <- Path.parseAbsDir path
-            newPath  <- Path.parseAbsDir (src </> name)
+                -- Create new paths
+                newPath  <- Path.parseAbsDir (src </> name)
 
-            renameAndCheck name origPath newPath
+                renameAndCheck name origPath newPath
 
 renameException :: Selector Package.RenameException
 renameException = const True

@@ -3,8 +3,10 @@ module Luna.Package.Environment where
 import Prologue
 
 import qualified Data.Char          as Char
+import qualified Path               as Path
 import qualified System.Environment as Env
 
+import Path    (Path, Abs, Dir)
 import Luna.IR (Name)
 
 packageEnvVarPrefix :: String
@@ -24,9 +26,11 @@ packageNameToEnvVarName txt = convert $ packageEnvVarPrefix <> envName where
             in if null prevWord then recur else reverse prevWord : recur
         else split (char : prevWord) chars
 
-setLibraryVar :: MonadIO m => Name -> FilePath -> m ()
-setLibraryVar name path = liftIO $ Env.setEnv varName path where
+setLibraryVar :: MonadIO m => Name -> Path Abs Dir -> m ()
+setLibraryVar name path =
+    liftIO $ Env.setEnv varName (Path.fromAbsDir path)
+    where
     varName = convert . packageNameToEnvVarName . convert $ name
 
-setLibraryVars :: MonadIO m => [(Name, FilePath)] -> m ()
+setLibraryVars :: MonadIO m => [(Name, Path Abs Dir)] -> m ()
 setLibraryVars = traverse_ $ uncurry setLibraryVar
